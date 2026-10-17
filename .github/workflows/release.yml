@@ -1,0 +1,68 @@
+# Release 流程：PR 合併進 main 後，自動打 Tag 並建立 GitHub Release（Issue #8）
+#
+# 流程：PR merge → Build（push 觸發）→ Release（本 workflow 接續觸發）
+# 產出：語意化版本標籤（v1.0.0 → v1.0.1 → ...）+ Release Notes + build artifact
+name: Release
+
+on:
+  # workflow_run：監聽另一個 workflow 的執行結果
+  # 當 Build workflow 在 main 分支跑完後，自動觸發本 workflow
+  workflow_run:
+    workflows: [Build]      # 監聽的 workflow 名稱（須與 build.yml 的 name 一致）
+    types: [completed]      # 觸發時機：Build 執行完畢（成功或失敗都會觸發）
+    branches: [main]        # 只監聽 main 分支上的 Build 執行
+
+# gh release create 需要寫入權限（建立 tag 與 release）
+permissions:
+  contents: write
+
+jobs:
+
+  release:
+    # Build 失敗時不發 Release（workflow_run 對成功/失敗都會觸發，需自行過濾）
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # checkout 觸發事件的 commit（merge 後的 main HEAD）
+      # fetch-depth: 0 抓取完整歷史，git describe 才看得到之前的 tag
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      # 版號計算：取最新 tag，patch 號 +1
+      #   無 tag 時        → v1.0.0
+      #   最新 tag v1.0.0  → v1.0.1
+      #   最新 tag v1.0.9  → v1.0.10
+      - name: Calculate next version
+        id: version
+        run: |
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          VERSION=$(echo "${LATEST#v}" | awk -F. -v OFS=. '{$NF++; print}')
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # 下載 Build workflow 產出的 artifact（build once, deploy many）
+      # 用觸發事件的 run id，確保拿到的是「這次 merge」對應的那份 artifact
+      - name: Download artifact from Build run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download ${{ github.event.workflow_run.id }} \
+            --name app-package \
+            --dir dist
+
+      # 建立 GitHub Release：
+      #   - 自動打 tag（指向 merge 後的 commit）
+      #   - --generate-notes 自動產生 Release Notes（列出包含的 PR 與 Issue）
+      #   - dist/* 把 artifact 檔案附到 Release
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
+            --title "Release ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            dist/*
