@@ -1,7 +1,16 @@
+# Deploy 流程：各環境（DEV → UAT → PROD）不再重新 build，
+# 改由 actions/download-artifact 取得 Build workflow 產出的同一份 artifact
+# 確保三個環境部署的內容完全一致（build once, deploy many）（Issue #9）
 name: Deploy
 
 on:
-  workflow_dispatch
+  workflow_dispatch:
+    # 手動觸發時必須指定要部署哪一次 Build run 的 artifact
+    inputs:
+      run_id:
+        description: 'Build workflow run ID（要部署哪一次 Build 的產物）'
+        required: true
+        type: string
 
 jobs:
 
@@ -10,7 +19,20 @@ jobs:
     environment: dev
 
     steps:
-      - run: echo "Deploy DEV"
+      # 下載指定 Build run 的 artifact（與 Release workflow 同一份）
+      # run-id 需搭配 github-token，actions/download-artifact 才能跨 workflow 讀取
+      - name: Download artifact from Build run
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Show artifact
+        run: |
+          echo "Deploy DEV"
+          cat build-info.txt
+
       - run: |
           echo "ENV_NAME=${{ vars.ENV_NAME }}"
           echo "SECRET_VALUE=${{ secrets.SECRET_VALUE }}"
@@ -21,7 +43,19 @@ jobs:
     environment: uat
 
     steps:
-      - run: echo "Deploy UAT"
+      # 每個 job 都重新下載同一份 artifact（runner 是獨立的機器）
+      - name: Download artifact from Build run
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Show artifact
+        run: |
+          echo "Deploy UAT"
+          cat build-info.txt
+
       - run: |
           echo "ENV_NAME=${{ vars.ENV_NAME }}"
           echo "SECRET_VALUE=${{ secrets.SECRET_VALUE }}"
@@ -32,7 +66,18 @@ jobs:
     environment: prod
 
     steps:
-      - run: echo "Deploy PROD"
+      - name: Download artifact from Build run
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Show artifact
+        run: |
+          echo "Deploy PROD"
+          cat build-info.txt
+
       - run: |
           echo "ENV_NAME=${{ vars.ENV_NAME }}"
           echo "SECRET_VALUE=${{ secrets.SECRET_VALUE }}"
